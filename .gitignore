@@ -1,0 +1,11 @@
+# Python venv
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS noise
+.DS_Store
+Thumbs.db
