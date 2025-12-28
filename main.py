@@ -17,6 +17,10 @@ def positive_int(value: str) -> int:
 
 
 def parse_args():
+    WIND = 0.0
+    GRAVITY = -10
+    TURBULENCE_POWER = 0.0
+
     p = argparse.ArgumentParser(
         description="Train and evaluate RL agents on LunarLander using Stable-Baselines3",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -28,6 +32,38 @@ def parse_args():
         choices=["dqn", "ppo"],
         default="ppo",
         help="RL algorithm to use",
+    )
+
+    # --- Training parameters ---
+    p.add_argument(
+        "--gravity",
+        type=float,
+        default=GRAVITY,
+    )
+
+    p.add_argument(
+        "--enable-wind",
+        action="store_true",
+    )
+
+    p.add_argument(
+        "--wind",
+        type=float,
+        default=WIND,
+    )
+
+    p.add_argument(
+        "--turbulence",
+        type=float,
+        default=TURBULENCE_POWER,
+    )
+
+    # --- Curriculum ---
+    p.add_argument(
+        "--curriculum",
+        choices=["baseline", "param", "joint"],
+        default="baseline",
+        help="Training schedule: baseline(final dist from start), param-wise curriculum, or joint curriculum"
     )
 
     # --- Environment ---
@@ -87,7 +123,7 @@ def main():
 
     for i in range(args.runs):
         run_seed = args.seed + i
-        run_name = args.run_name or f"{args.algo}_{args.env_id}_seed{run_seed}"
+        run_name = args.run_name or f"{args.algo}_{args.env_id}_{args.curriculum}_seed{run_seed}"
 
         config = RunConfig(
             run_name=run_name,
@@ -100,6 +136,13 @@ def main():
                 "timesteps": args.timesteps,
                 "eval_episodes": args.eval_episodes,
                 "render_eval": args.render,
+                "env_kwargs": {
+                    "gravity": args.gravity,
+                    "enable_wind": args.enable_wind,
+                    "wind_power": args.wind,
+                    "turbulence_power": args.turbulence,
+                },
+                "curriculum": args.curriculum,
             },
         )
 
