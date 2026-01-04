@@ -54,21 +54,25 @@ def evaluate_suite(model, env_id: str, seed: int, max_steps: int, vecnorm_path: 
             "case": name,
             "env_kwargs": env_kwargs,
             "mean_return": r["mean_return"],
-            "success_rate": r["success_rate"],
+            "strict_success_rate": r["strict_success_rate"],
+            "soft_success_rate": r["soft_success_rate"],
             "mean_length": r["mean_length"],
             "episodes_used": eps,
             "rendered": render_this,
+            "debugging": r["fail_counts"],
         })
 
     mean_return = sum(x["mean_return"] for x in results) / len(results)
-    mean_success = sum(x["success_rate"] for x in results) / len(results)
+    mean_strict_success = sum(x["strict_success_rate"] for x in results) / len(results)
+    mean_soft_success = sum(x["soft_success_rate"] for x in results) / len(results)
     mean_length = sum(x["mean_length"] for x in results) / len(results)
 
     return {
         "episodes_per_case": episodes_per_case,
         "num_cases": len(results),
         "mean_return_over_cases": mean_return,
-        "mean_success_over_cases": mean_success,
+        "mean_strict_success_over_cases": mean_strict_success,
+        "mean_soft_success_over_cases": mean_soft_success,
         "mean_length_over_cases": mean_length,
         "cases": results,
     }

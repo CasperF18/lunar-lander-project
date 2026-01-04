@@ -103,6 +103,19 @@ def parse_args():
         help="Number of evaluation episodes after training",
     )
     p.add_argument(
+        "--eval-every",
+        type=positive_int,
+        default=100_000,
+        help="When to do a checkpoint eval",
+    )
+    p.add_argument(
+        "--checkpoint-episodes",
+        type=positive_int,
+        default=5,
+        help="Amount of eval episodes on checkpoint",
+    )
+
+    p.add_argument(
         "--render",
         action="store_true",
         help="Render evaluation episodes"
@@ -143,6 +156,8 @@ def main():
                     "turbulence_power": args.turbulence,
                 },
                 "curriculum": args.curriculum,
+                "eval_every": args.eval_every,
+                "checkpoint_episodes": args.checkpoint_episodes,
             },
         )
 
@@ -155,6 +170,7 @@ def main():
                 run_dir=logger.run_dir,
                 eval_episodes=args.eval_episodes,
                 render_eval=args.render,
+                logger=logger,
             )
             model_filename = "model_ppo.zip"
         else:
@@ -168,19 +184,6 @@ def main():
 
         model_path = logger.run_dir / model_filename
         model.save(str(model_path))
-
-        logger.log_episode(
-            episode_return=float(eval_result["mean_return"]),
-            episode_length=int(eval_result["mean_length"]),
-            terminated=True,
-            truncated=False,
-            info={
-                "type": "evaluation_summary",
-                "algo": args.algo,
-                "model_path": str(model_path),
-                **eval_result,
-            },
-        )
 
         logger.close()
 

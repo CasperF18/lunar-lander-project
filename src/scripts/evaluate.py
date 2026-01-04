@@ -5,35 +5,30 @@ import numpy as np
 
 
 def evaluate_policy(model, env, seed: int, episodes: int) -> Dict[str, Any]:
+    fail_counts = {"truncated": 0, "not_centered": 0, "not_both_legs": 0}
+
     returns = []
     lengths = []
     episode_details = []
-    successes = []
+    strict_successes = []
+    soft_successes = []
 
     # Success window around pad center (x = 0)
     PAD_X_TOLERANCE = 0.2
 
-    # “Stable landing” thresholds (diagnostic)
-    MAX_ABS_VX = 0.5
-    MAX_ABS_VY = 0.5
-    MAX_ABS_ANGLE = 0.2
-
     for ep in range(episodes):
-        env.env_method("reset", seed=seed + ep)
-        obs = env.reset()
+        reset_results = env.env_method("reset", seed=seed + ep)
+        raw_obs_list = [r[0] for r in reset_results]
+        raw_obs = np.stack(raw_obs_list, axis=0).astype(np.float32)
+        obs = env.normalize_obs(raw_obs) if hasattr(env, "normalize_obs") else raw_obs
 
         done = np.array([False])
 
         ep_return = 0.0
         ep_len = 0
 
-        last_obs_norm = obs
+        last_obs = obs
         last_truncated = False
-        last_info = None
-
-        best_contact = None
-        best_contact_step = None
-        best_contact_score = float("inf")
 
         while not bool(done[0]):
             action, _ = model.predict(obs, deterministic=True)
@@ -42,73 +37,87 @@ def evaluate_policy(model, env, seed: int, episodes: int) -> Dict[str, Any]:
             ep_return += float(reward[0])
             ep_len += 1
 
-            last_obs_norm = obs
-            last_info = infos[0]
+            info0 = infos[0]
 
             # I am checking here when an episode ends if it was because of time-limit
             if bool(done[0]):
-                last_truncated = bool(last_info.get("TimeLimit.truncated", False))
+                last_truncated = bool(info0.get("TimeLimit.truncated", False))
+                terminal_obs = info0.get("terminal_observation", None)
 
-            if hasattr(env, "unnormalize_obs"):
-                raw_obs = env.unnormalize_obs(obs.copy())
+                if terminal_obs is not None:
+                    last_obs = np.array([terminal_obs], dtype=np.float32)
+                else:
+                    last_obs = obs
             else:
-                raw_obs = obs
-
-            # obs: [x, y, vx, vy, angle, ang_vel, leg1, leg2] - taken from their documentation
-            raw = raw_obs[0]
-            x = float(raw[0])
-            y = float(raw[1])
-            vx = float(raw[2])
-            vy = float(raw[3])
-            angle = float(raw[4])
-            ang_vel = float(raw[5])
-            leg1 = bool(raw[6])
-            leg2 = bool(raw[7])
-
-            if leg1 and leg2:
-                score = abs(x) + MAX_ABS_VX * abs(vx) + MAX_ABS_VY * abs(vy) + MAX_ABS_ANGLE * abs(angle)
-                if score < best_contact_score:
-                    best_contact_score = score
-                    best_contact_step = ep_len
-                    best_contact = {"x": x, "y": y, "vx": vx, "vy": vy, "angle": angle, "angle_vel": ang_vel}
+                last_obs = obs
 
         if hasattr(env, "unnormalize_obs"):
-            final_raw_obs = env.unnormalize_obs(last_obs_norm.copy())[0]
+            final_raw_obs = env.unnormalize_obs(last_obs)[0]
         else:
-            final_raw_obs = last_obs_norm[0]
+            final_raw_obs = last_obs[0]
 
-        final_leg1 = bool(final_raw_obs[6])
-        final_leg2 = bool(final_raw_obs[7])
+        # obs: [x, y, vx, vy, angle, ang_vel, leg1, leg2] - taken from their documentation
+        final_leg1 = float(final_raw_obs[6]) > 0.5
+        final_leg2 = float(final_raw_obs[7]) > 0.5
+        final_x = float(final_raw_obs[0])
 
-        centered_strict = (best_contact is not None) and (abs(best_contact["x"]) <= PAD_X_TOLERANCE)
-        episode_success = (not last_truncated) and centered_strict and final_leg1 and final_leg2
+        final_both_legs = final_leg1 and final_leg2
+        final_centered = abs(final_x) <= PAD_X_TOLERANCE
 
+        if last_truncated:
+            fail_counts["truncated"] += 1
+        if not final_centered:
+            fail_counts["not_centered"] += 1
+        if not final_both_legs:
+            fail_counts["not_both_legs"] += 1
+
+        episode_strict_success = (
+                (not last_truncated)
+                and final_both_legs
+                and final_centered
+        )
+
+        episode_soft_success = (
+            (not last_truncated)
+            and (final_leg1 or final_leg2)
+            and abs(final_x) <= 0.3
+        )
+
+        # Mainly for debugging
         episode_details.append({
-            "episode": ep,
-            "return": ep_return,
-            "length": ep_len,
-            "best_contact_step": best_contact_step,
-            "best_contact": best_contact,
-            "centered_final": centered_strict,
-            "truncated": last_truncated,
-            "success_eval": episode_success,
+#            "episode": ep,
+#            "return": ep_return,
+#            "length": ep_len,
+#            "centered_final": final_centered,
+#            "truncated": last_truncated,
+#           "success_eval": episode_success,
+#            "leg1": final_leg1,
+#            "leg2": final_leg2,
+#            "leg1_value": final_leg1_value,
+#            "leg2_value": final_leg2_value,
+#            "final raw": final_raw,
         })
 
         returns.append(ep_return)
         lengths.append(ep_len)
-        successes.append(episode_success)
+        strict_successes.append(episode_strict_success)
+        soft_successes.append(episode_soft_success)
 
     mean_return = sum(returns) / len(returns)
     mean_length = sum(lengths) / len(lengths)
-    success_rate = sum(1 for s in successes if s) / len(successes)
+    strict_success_rate = sum(strict_successes) / len(strict_successes)
+    soft_success_rate = sum(soft_successes) / len(soft_successes)
 
     return {
         "eval_episodes": episodes,
         "mean_return": mean_return,
         "mean_length": mean_length,
-        "success_rate": success_rate,
+        "strict_success_rate": strict_success_rate,
+        "soft_success_rate": soft_success_rate,
         "returns": returns,
         "lengths": lengths,
-        "successes": successes,
-        "episode_details": episode_details
+        "strict_successes": strict_successes,
+        "soft_successes": soft_successes,
+        "episode_details": episode_details,
+        "fail_counts": fail_counts,
     }

@@ -6,7 +6,7 @@ import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 
-from src.utils.logger import RunConfig
+from src.utils.logger import RunConfig, RunLogger
 from src.scripts.evaluate_suite import evaluate_suite
 from src.scripts.make_env import make_env
 from src.experiments.curriculum import baseline_stages, parameter_wise_stages, joint_stages
@@ -37,9 +37,12 @@ def _build_train_env(config: RunConfig, stage_seed_offset: int, env_kwargs: dict
     return train_env
 
 
-def train_ppo(config: RunConfig, run_dir: Path, eval_episodes: int, render_eval: bool):
+def train_ppo(config: RunConfig, run_dir: Path, eval_episodes: int, render_eval: bool, logger: RunLogger):
     total_timesteps = int(config.extra["timesteps"])
     curriculum_type = (config.extra or {}).get("curriculum", "baseline")
+
+    eval_every = int((config.extra or {}).get("eval_every", 100_000))
+    checkpoint_episodes = int((config.extra or {}).get("checkpoint_episodes", 5))
 
     if curriculum_type == "param":
         stages = parameter_wise_stages(total_timesteps)
@@ -55,7 +58,6 @@ def train_ppo(config: RunConfig, run_dir: Path, eval_episodes: int, render_eval:
     trained_steps = 0
 
     cases = [(c.name, c.env_kwargs) for c in all_eval_cases()]
-
     last_suite = None
 
     for si, stage in enumerate(stages):
@@ -80,39 +82,73 @@ def train_ppo(config: RunConfig, run_dir: Path, eval_episodes: int, render_eval:
         else:
             model.set_env(train_env)
 
-        model.learn(
-            total_timesteps=stage.timesteps,
-            reset_num_timesteps=False,
-            tb_log_name="train",
-        )
-
-        trained_steps += stage.timesteps
-
-        train_env.save(str(vecnorm_path))
-        train_env.close()
-
+        remaining = stage.timesteps
         is_final_stage = (si == len(stages) - 1)
 
-        last_suite = evaluate_suite(
-            model=model,
-            env_id=config.env_id,
-            seed=config.seed,
-            max_steps=config.max_steps_per_episode,
-            vecnorm_path=vecnorm_path,
-            cases=cases,
-            episodes_per_case=eval_episodes,
-            render=render_eval and is_final_stage,
-            render_episodes=4
-        )
+        while remaining > 0:
+            chunk = min(eval_every, remaining)
+
+            model.learn(
+                total_timesteps=chunk,
+                reset_num_timesteps=False,
+                tb_log_name="train",
+            )
+
+            trained_steps += chunk
+            remaining -= chunk
+
+            train_env.save(str(vecnorm_path))
+
+            is_final_checkpoint = is_final_stage and (remaining == 0)
+            episodes_this_eval = eval_episodes if is_final_checkpoint else checkpoint_episodes
+
+            last_suite = evaluate_suite(
+                model=model,
+                env_id=config.env_id,
+                seed=config.seed,
+                max_steps=config.max_steps_per_episode,
+                vecnorm_path=vecnorm_path,
+                cases=cases,
+                episodes_per_case=episodes_this_eval,
+                render=render_eval and is_final_stage,
+                render_episodes=4
+            )
+
+            logger.log_episode(
+                episode_return=float(last_suite["mean_return_over_cases"]),
+                episode_length=int(last_suite["mean_length_over_cases"]),
+                terminated=True,
+                truncated=False,
+                info={
+                    "type": "eval_checkpoint",
+                    "algo": "ppo",
+                    "curriculum": curriculum_type,
+                    "run_seed": config.seed,
+                    "stage_index": si,
+                    "stage_name": stage.name,
+                    "stage_timesteps": stage.timesteps,
+                    "trained_steps": trained_steps,
+                    "actual_timesteps": int(model.num_timesteps),
+                    "chunk_timesteps": chunk,
+                    "checkpoint_kind": "final" if is_final_checkpoint else "mid",
+                    "episodes_per_case": episodes_this_eval,
+                    "train_env_kwargs": stage_env_kwargs,
+                    "suite": last_suite,
+                },
+            )
+
+        train_env.close()
 
     assert model is not None
     assert last_suite is not None
 
     eval_result = {
+        "actual_timesteps": int(model.num_timesteps),
         "eval_episodes": last_suite["episodes_per_case"] * last_suite["num_cases"],
         "mean_return": last_suite["mean_return_over_cases"],
         "mean_length": last_suite["mean_length_over_cases"],
-        "success_rate": last_suite["mean_success_over_cases"],
+        "strict_success_rate": last_suite["mean_strict_success_over_cases"],
+        "soft_success_rate": last_suite["mean_soft_success_over_cases"],
         "suite": last_suite,
         "curriculum": curriculum_type,
         "stages": [{"name": s.name, "timesteps": s.timesteps} for s in stages],
