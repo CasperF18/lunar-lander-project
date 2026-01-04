@@ -10,5 +10,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Logs
+# Logs and diagrams
 logs/
+analysis_out/
+wrong_analysis/

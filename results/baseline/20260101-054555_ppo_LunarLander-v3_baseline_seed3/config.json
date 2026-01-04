@@ -1,0 +1,22 @@
+{
+  "run_name": "ppo_LunarLander-v3_baseline_seed3",
+  "env_id": "LunarLander-v3",
+  "seed": 3,
+  "max_steps_per_episode": 1000,
+  "notes": "SB3 training run",
+  "extra": {
+    "algo": "ppo",
+    "timesteps": 500000,
+    "eval_episodes": 100,
+    "render_eval": false,
+    "env_kwargs": {
+      "gravity": -10,
+      "enable_wind": false,
+      "wind_power": 0.0,
+      "turbulence_power": 0.0
+    },
+    "curriculum": "baseline",
+    "eval_every": 25000,
+    "checkpoint_episodes": 10
+  }
+}
